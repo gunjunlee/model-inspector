@@ -15,3 +15,13 @@ description = "pytorch model inspector"
 dynamic = ["version"]
 readme = "README.md"
 license = {text = "MIT License"}
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+markers = [
+  "timm", #: marks tests that require timm library
+  "sd", #: marks tests that require stable-diffusion library
+]
+testpaths = [
+    "tests",
+]

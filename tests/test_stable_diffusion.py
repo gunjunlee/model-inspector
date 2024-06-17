@@ -4,6 +4,9 @@ import torch
 from diffusers import DiffusionPipeline
 from accelerate.utils import extract_model_from_parallel
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 from model_inspector import ProfilingInterpreter
 
 
@@ -29,12 +32,13 @@ def test_stable_diffusion_xl_base_1_0_fp16():
     interp = ProfilingInterpreter(pipe.unet, input_example=((latent, t, encoder_hidden_states, ), {"added_cond_kwargs": added_cond_kwargs}))
     _ = interp.run(latent, t, encoder_hidden_states, added_cond_kwargs=added_cond_kwargs)
     table = interp.table
+    return table
+
+
+if __name__ == "__main__":
+    table = test_stable_diffusion_xl_base_1_0_fp16()
     table.to_csv("sd.csv", index=False, sep="\t")
     table[table.valid].to_csv("sd_valid.csv", index=False, sep="\t")
     table[table.flops > 0].to_csv("sd_flops.csv", index=False, sep="\t")
     # import pdb; pdb.set_trace()
     print("done")
-
-
-if __name__ == "__main__":
-    test_stable_diffusion_xl_base_1_0_fp16()

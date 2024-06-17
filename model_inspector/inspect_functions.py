@@ -17,9 +17,11 @@ def _calc_flops_conv(*args, **kwargs):
 
     assert groups == 1, f"Groups > 1 not supported"
     assert transposed is False, f"Transposed convolutions not supported"
+    assert input.shape[1] == weight.shape[1] * groups, f"Input channels should be equal to weight channels * groups"
 
     b, ic, h, w = input.shape
     oc, ic, kh, kw = weight.shape
+
     sh, sw = stride
     ph, pw = padding
     dh, dw = dilation
