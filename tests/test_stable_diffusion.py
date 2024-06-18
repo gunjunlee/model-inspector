@@ -5,8 +5,8 @@ from diffusers import DiffusionPipeline
 
 from model_inspector import ProfilingInterpreter
 
-from .common import REF_FLOPS
 from .common import setup_logging
+from .common import get_vision_spec
 
 
 logger = setup_logging(__name__)

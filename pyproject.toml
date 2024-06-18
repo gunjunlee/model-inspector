@@ -1,5 +1,13 @@
 [build-system]
 requires = ["setuptools >= 61.0"]
+requires-dist = [
+  "setuptools",
+  "wheel",
+  "twine",
+  "pytest",
+  "pytest-xdist",
+  "pytest"
+]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -21,6 +29,7 @@ minversion = "6.0"
 markers = [
   "fast", #: marks tests that are fast
   "timm", #: marks tests that require timm library
+  "torchvision", #: marks tests that require torchvision library
   "sd", #: marks tests that require stable-diffusion library
 ]
 testpaths = [

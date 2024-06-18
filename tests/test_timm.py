@@ -5,7 +5,7 @@ from timm import create_model
 
 from model_inspector import ProfilingInterpreter
 
-from .common import REF_FLOPS
+from .common import get_vision_spec
 from .common import setup_logging
 
 
@@ -21,7 +21,7 @@ def _test_timm_model(model_name: str):
     interp = ProfilingInterpreter(model, input_example=input_example)
     _ = interp.run(*args, **kwargs)
     table = interp.table
-    assert pytest.approx(table.exact_flops.sum(), rel=1e-1) == REF_FLOPS[model_name]
+    assert pytest.approx(table.exact_flops.sum(), rel=1e-1) == get_vision_spec(model_name)[0]
     return table
 
 

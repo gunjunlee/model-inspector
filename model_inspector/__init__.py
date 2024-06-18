@@ -151,6 +151,7 @@ class ProfilingInterpreter(Interpreter):
         self._torch_profiler: torch.profiler.profile | None = None
         self._timers = []
         self._flops_manual = defaultdict(int)
+        self._table = None
 
     def add_profile_result(self, profile_result: ProfileResult):
         self.profile_results.add(profile_result)
@@ -261,7 +262,23 @@ class ProfilingInterpreter(Interpreter):
         return start_timer.elapsed_time(end_timer)
 
     @property
+    def flops(self):
+        df = self.table
+        return df[df.device == "CPU"].flops.sum()
+
+    @property
+    def cuda_flops(self):
+        df = self.table
+        return df[df.device == "CUDA"].flops.sum()
+
+    @property
     def table(self):
+        if self._table is not None:
+            return self._table
+        self._table = self._get_table()
+        return self._table
+
+    def _get_table(self):
         if self._torch_profiler is not None:
             torch.cuda.synchronize()
             datas = []
