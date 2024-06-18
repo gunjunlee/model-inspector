@@ -2,12 +2,14 @@ import pytest
 
 import torch
 from diffusers import DiffusionPipeline
-from accelerate.utils import extract_model_from_parallel
-
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 from model_inspector import ProfilingInterpreter
+
+from .common import REF_FLOPS
+from .common import setup_logging
+
+
+logger = setup_logging(__name__)
 
 
 def test_stable_diffusion_xl_base_1_0_fp16():

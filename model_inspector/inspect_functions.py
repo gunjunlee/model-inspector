@@ -15,7 +15,6 @@ def _calc_flops_conv(*args, **kwargs):
     assert len(args) == 9, f"Expected 9 arguments, got {len(args)}"
     input, weight, bias_opt, stride, padding, dilation, transposed, output_padding, groups = args
 
-    assert groups == 1, f"Groups > 1 not supported"
     assert transposed is False, f"Transposed convolutions not supported"
     assert input.shape[1] == weight.shape[1] * groups, f"Input channels should be equal to weight channels * groups"
 

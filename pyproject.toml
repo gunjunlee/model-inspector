@@ -19,6 +19,7 @@ license = {text = "MIT License"}
 [tool.pytest.ini_options]
 minversion = "6.0"
 markers = [
+  "fast", #: marks tests that are fast
   "timm", #: marks tests that require timm library
   "sd", #: marks tests that require stable-diffusion library
 ]
