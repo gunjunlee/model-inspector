@@ -152,14 +152,28 @@ class ProfilingInterpreter(Interpreter):
         self._timers = []
         self._flops_manual = defaultdict(int)
         self._table = None
+        self._is_cuda_op = defaultdict(lambda : False)
 
     def add_profile_result(self, profile_result: ProfileResult):
         self.profile_results.add(profile_result)
 
-    def run(self, *args, **kwargs):
-        self._profiling = True
+    def init(self):
+        self.unsupported_function_types = []
+        self.unsupported_method_types = []
+        self.unsupported_module_types = []
+        self._warning = False
+        self._profiling = False
+        self.profile_results = ProfileResults()
+        self._torch_profiler: torch.profiler.profile | None = None
         self._timers = []
         self._flops_manual = defaultdict(int)
+        self._table = None
+        self._is_cuda_op = defaultdict(lambda : False)
+
+    def run(self, *args, **kwargs):
+        self.init()
+        self._profiling = True
+
         with torch.profiler.profile(
             activities=[
                 torch.profiler.ProfilerActivity.CPU,
@@ -223,48 +237,69 @@ class ProfilingInterpreter(Interpreter):
                 else:
                     raise NotImplementedError(f"Unsupported op {n.op}")
 
-        if op_name is not None:
-            node_name = list(n.meta.get("nn_module_stack", [""]))[-1]
-            args, kwargs = self.fetch_args_kwargs_from_env(n)
-            input_shapes = ", ".join(str(arg.shape) for arg in args if isinstance(arg, torch.Tensor))
-            layer_name = f"{_INSPECT_PREFIX}{node_name}/{op_name}/{input_shapes}"
-            if op_name == "aten::convolution":
+            if op_name is not None:
+                node_name = list(n.meta.get("nn_module_stack", [""]))[-1]
                 args, kwargs = self.fetch_args_kwargs_from_env(n)
-                self._flops_manual[layer_name] += _calc_flops_conv(*args, **kwargs)
-            if op_name == "aten::_scaled_dot_product_flash_attention":
-                args, kwargs = self.fetch_args_kwargs_from_env(n)
-                self._flops_manual[layer_name] += _calc_flops_attention(*args, **kwargs)
-            with torch.profiler.record_function(layer_name), CudaTimer(layer_name) as timer:
-                self._timers.append(timer)
+                input_shapes = ", ".join(str(arg.shape) for arg in args if isinstance(arg, torch.Tensor))
+                layer_name = f"{_INSPECT_PREFIX}{node_name}/{op_name}/{input_shapes}"
+                if op_name == "aten::convolution":
+                    args, kwargs = self.fetch_args_kwargs_from_env(n)
+                    self._flops_manual[layer_name] += _calc_flops_conv(*args, **kwargs)
+                if op_name == "aten::_scaled_dot_product_flash_attention":
+                    args, kwargs = self.fetch_args_kwargs_from_env(n)
+                    self._flops_manual[layer_name] += _calc_flops_attention(*args, **kwargs)
+                if op_name in FLOPABLE_OPS:
+                    if args[0].device.type == "cuda":
+                        with torch.profiler.record_function(layer_name), CudaTimer(layer_name) as timer:
+                            self._is_cuda_op[layer_name] = True
+                            self._timers.append(timer)
+                            return super().run_node(n)
+                with torch.profiler.record_function(layer_name):
+                    return super().run_node(n)
+            else:
                 return super().run_node(n)
+
+    def get_cuda_time(self, name, device):
+        if device == "CUDA":
+            time = 0
+            for timer in self._timers:
+                if timer.name == name:
+                    time += timer.elapsed_time()
+            return time
+        elif device == "CPU":
+            return 0
         else:
-            return super().run_node(n)
+            raise ValueError(f"Unknown device {device}")
 
-    def get_cuda_time(self, name):
-        time = 0
-        for timer in self._timers:
-            if timer.name == name:
-                time += timer.elapsed_time()
-        return time
+    def get_flops(self, name, device):
+        if device == "CUDA":
+            return self._flops_manual[name]
+        elif device == "CPU":
+            if self._is_cuda_op[name]:
+                return 0
+            return self._flops_manual[name]
+        else:
+            raise ValueError(f"Unknown device {device}")
 
-    def get_flops(self, name):
-        flops = self._flops_manual[name]
-        return flops
-
-    def get_cuda_time_accum(self, name):
-        start_timer = self._timers[0].start
-        end_timer = None
-        for timer in self._timers:
-            if timer.name == name:
-                end_timer = timer.end
-        if end_timer is None:
+    def get_cuda_time_accum(self, name, device):
+        if device == "CUDA":
+            start_timer = self._timers[0].start
+            end_timer = None
+            for timer in self._timers:
+                if timer.name == name:
+                    end_timer = timer.end
+            if end_timer is None:
+                return None
+            return start_timer.elapsed_time(end_timer)
+        elif device == "CPU":
             return None
-        return start_timer.elapsed_time(end_timer)
+        else:
+            raise ValueError(f"Unknown device {device}")
 
     @property
     def flops(self):
         df = self.table
-        return df[df.device == "CPU"].flops.sum()
+        return df.flops.sum()
 
     @property
     def cuda_flops(self):
@@ -291,12 +326,13 @@ class ProfilingInterpreter(Interpreter):
                     name, op, input_shapes = event.name, str("none"), str("none")
                     valid = False
 
-                cuda_time = self.get_cuda_time(event.trace_name)
-                new_cuda_time_accum = self.get_cuda_time_accum(event.trace_name)
+                device = event.device_type.name
+                cuda_time = self.get_cuda_time(event.trace_name, device)
+                new_cuda_time_accum = self.get_cuda_time_accum(event.trace_name, device)
                 if new_cuda_time_accum is not None:
                     cuda_time_accum = new_cuda_time_accum
 
-                flops = event.flops + self.get_flops(event.trace_name)
+                flops = event.flops + self.get_flops(event.trace_name, device)
 
                 data = {
                     "name": name,

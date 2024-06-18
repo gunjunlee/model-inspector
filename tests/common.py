@@ -95,6 +95,8 @@ def get_vision_spec(name: str):
         return spec
     return spec, 224
 
+
+# just for making _REF_FLOPS_VISION
 def _get_torchvision_models():
     import inspect
     import torchvision
