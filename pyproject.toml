@@ -1,13 +1,6 @@
 [build-system]
 requires = ["setuptools >= 61.0"]
-requires-dist = [
-  "setuptools",
-  "wheel",
-  "twine",
-  "pytest",
-  "pytest-xdist",
-  "pytest"
-]
+
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -23,6 +16,44 @@ description = "pytorch model inspector"
 dynamic = ["version"]
 readme = "README.md"
 license = {text = "MIT License"}
+
+# Development dependencies
+# pip install -e .[lint,test,dist]
+# or you can install all dependencies with
+# pip install -e .[dev]
+[project.optional-dependencies]
+lint = [
+  "black",
+  "flake8",
+  "isort",
+  "mypy",
+  "pre-commit",
+  "ruff",
+]
+
+test = [
+  "pytest-xdist",
+  "pytest",
+  "pytest-cov",
+  "pytest-mock",
+  "timm",
+  "torch",
+  "torchvision",
+  "diffusers",
+  "tqdm",
+]
+
+dist = [
+  "setuptools",
+  "wheel",
+  "twine",
+]
+
+dev = [
+  "model-inspector[lint,test,dist]",
+  "jupyter",
+  "notebook",
+]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

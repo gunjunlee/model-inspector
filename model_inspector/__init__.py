@@ -46,7 +46,6 @@ FLOPABLE_OPS = {
 # aten::mul.Tensor
 # aten::div.Tensor
 
-import shy; shy.err_hook()
 
 _INSPECT_PREFIX = "_MOD_INS:"
 
@@ -273,7 +272,9 @@ class ProfilingInterpreter(Interpreter):
 
     def get_flops(self, name, device):
         if device == "CUDA":
-            return self._flops_manual[name]
+            val = self._flops_manual[name]
+            self._flops_manual[name] = 0  # group convolutions can be counted multiple times in the same layer (maybe torch profiler bug)
+            return val
         elif device == "CPU":
             if self._is_cuda_op[name]:
                 return 0

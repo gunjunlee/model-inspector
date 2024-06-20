@@ -88,6 +88,8 @@ _REF_FLOPS_VISION = {
     "wide_resnet50_2": (11.40 * 1e+9 * 2, 224),
 }
 
+_REF_FLOPS_VISION["vit_base_patch16_224"] = _REF_FLOPS_VISION["vit_b_16"]
+
 
 def get_vision_spec(name: str):
     spec = _REF_FLOPS_VISION[name]
@@ -169,6 +171,14 @@ def check_flops(model_name, calc_flops, ref_flops):
         f"[{model_name}] " \
         f"calc flops: {print_flops(calc_flops)}, " \
         f"ref flops: {print_flops(ref_flops)} (x{ref_flops / calc_flops:.1f})"
+
+
+def get_available_devices():
+    import torch
+    devices = ["cpu"]
+    if torch.cuda.is_available():
+        devices.append("cuda")
+    return devices
 
 
 if __name__ == "__main__":
