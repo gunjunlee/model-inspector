@@ -36,6 +36,8 @@ def _test_torchvision_model(model_name: str, device: str = None):
     if not DEBUG:
         test_name = f"{model_name}_{device}"
         check_flops(test_name, interp.flops, ref_flops)
+        if device == "cuda":
+            check_flops(test_name, interp.cuda_flops, ref_flops)
     return interp
 
 
@@ -565,6 +567,6 @@ def test_wide_resnet50_2(device):
 
 if __name__ == "__main__":
     DEBUG = True
-    interp = _test_torchvision_model("regnet_x_8gf", device="cuda")
+    interp = _test_torchvision_model("convnext_base", device="cpu")
     print("flops: ", interp.flops)
-    interp.table.to_csv("torchvision_cuda.csv", index=False, sep="\t")
+    # interp.table.to_csv("torchvision_cuda.csv", index=False, sep="\t")

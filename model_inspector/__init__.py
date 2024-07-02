@@ -14,7 +14,8 @@ from collections import defaultdict
 from collections import OrderedDict
 from typing import List, Tuple, Dict, Any, Union
 
-from .inspect_functions import _calc_flops_conv, _calc_flops_attention
+from .inspect_functions import FLOPABLE_OPS
+from .inspect_functions import get_flops_counter
 
 
 logger = logging.getLogger(__name__)
@@ -24,27 +25,6 @@ try:
 except ImportError:
     logger.warning("tqdm not found. Install tqdm to see progress bars.")
     tqdm = lambda x, *args, **kwargs: x
-
-
-# https://github.com/pytorch/pytorch/blob/b0282071c48860fcf8f4c1025bc207138173617b/torch/csrc/profiler/util.cpp#L405
-FLOPABLE_OPS = {
-    # manual
-    "aten::_scaled_dot_product_flash_attention",
-    "aten::convolution",
-
-    # auto
-    "aten::conv2d",
-    "aten::mm",
-    "aten::addmm",
-    "aten::mul",
-    "aten::add",
-    "aten::bmm",
-    "aten::baddbmm",
-}
-
-# aten::add.Tensor
-# aten::mul.Tensor
-# aten::div.Tensor
 
 
 _INSPECT_PREFIX = "_MOD_INS:"
@@ -141,17 +121,7 @@ class ProfilingInterpreter(Interpreter):
             gm = torch.fx.symbolic_trace(module)
         super().__init__(gm)
         self.model_arguments = list(inspect.signature(self.module.forward).parameters)
-        self.unsupported_function_types = []
-        self.unsupported_method_types = []
-        self.unsupported_module_types = []
-        self._warning = False
-        self._profiling = False
-        self.profile_results = ProfileResults()
-        self._torch_profiler: torch.profiler.profile | None = None
-        self._timers = []
-        self._flops_manual = defaultdict(int)
-        self._table = None
-        self._is_cuda_op = defaultdict(lambda : False)
+        self.init()
 
     def add_profile_result(self, profile_result: ProfileResult):
         self.profile_results.add(profile_result)
@@ -181,7 +151,7 @@ class ProfilingInterpreter(Interpreter):
             record_shapes=True,
             profile_memory=True,
             with_stack=True,
-            with_flops=True,
+            with_flops=False,
             with_modules=True,
         ) as p:
             self._torch_profiler = p
@@ -241,22 +211,18 @@ class ProfilingInterpreter(Interpreter):
                 args, kwargs = self.fetch_args_kwargs_from_env(n)
                 input_shapes = ", ".join(str(arg.shape) for arg in args if isinstance(arg, torch.Tensor))
                 layer_name = f"{_INSPECT_PREFIX}{node_name}/{op_name}/{input_shapes}"
-                if op_name == "aten::convolution":
-                    args, kwargs = self.fetch_args_kwargs_from_env(n)
-                    self._flops_manual[layer_name] += _calc_flops_conv(*args, **kwargs)
-                if op_name == "aten::_scaled_dot_product_flash_attention":
-                    args, kwargs = self.fetch_args_kwargs_from_env(n)
-                    self._flops_manual[layer_name] += _calc_flops_attention(*args, **kwargs)
-                if op_name in FLOPABLE_OPS:
-                    if args[0].device.type == "cuda":
-                        with torch.profiler.record_function(layer_name), CudaTimer(layer_name) as timer:
-                            self._is_cuda_op[layer_name] = True
-                            self._timers.append(timer)
-                            return super().run_node(n)
                 with torch.profiler.record_function(layer_name):
+                    if op_name in FLOPABLE_OPS:
+                        args, kwargs = self.fetch_args_kwargs_from_env(n)
+                        self._flops_manual[layer_name] += get_flops_counter(op_name)(*args, **kwargs)
+                        if args[0].device.type == "cuda":
+                            with CudaTimer(layer_name) as timer:
+                                self._is_cuda_op[layer_name] = True
+                                self._timers.append(timer)
+                                return super().run_node(n)
                     return super().run_node(n)
-            else:
-                return super().run_node(n)
+
+        return super().run_node(n)
 
     def get_cuda_time(self, name, device):
         if device == "CUDA":
@@ -314,6 +280,11 @@ class ProfilingInterpreter(Interpreter):
         self._table = self._get_table()
         return self._table
 
+    @property
+    def flops_table(self):
+        df = self.table
+        return df[df.flops > 0]
+
     def _get_table(self):
         if self._torch_profiler is not None:
             torch.cuda.synchronize()
@@ -333,7 +304,7 @@ class ProfilingInterpreter(Interpreter):
                 if new_cuda_time_accum is not None:
                     cuda_time_accum = new_cuda_time_accum
 
-                flops = event.flops + self.get_flops(event.trace_name, device)
+                flops = self.get_flops(event.trace_name, device)
 
                 data = {
                     "name": name,
@@ -361,7 +332,6 @@ class ProfilingInterpreter(Interpreter):
                 }
                 datas.append(data)
             df = pd.DataFrame(datas)
-            df = self.calc_exact_flops(df)
             df["cpu_time_rate"] = df["cpu_time_total"] / df["cpu_time_total"].max()
             df["cuda_time_rate"] = df["cuda_time_manual"] / df["cuda_time_manual"].max()
 
@@ -374,57 +344,3 @@ class ProfilingInterpreter(Interpreter):
         else:
             logger.warning("No profiler results available")
             return None
-
-    def calc_exact_flops(self, df):
-        child_dict = defaultdict(list)
-        parent_dict = defaultdict(list)
-        index_to_flops = defaultdict(int)
-        ids = df.id.to_numpy()
-        shallow = df[["flops", "cpu_children", "sequence_nr"]].to_numpy()
-        for index, (flops, cpu_children, sequence_nr) in enumerate(
-            tqdm(shallow, total=len(df))
-        ):
-            index_to_flops[index] = flops
-            children_index = np.isin(ids, cpu_children).nonzero()[0]
-            children = shallow[children_index]
-            for child_index, (child_flops, child_cpu_children, child_sequence_nr) in zip(
-                children_index, children
-            ):
-                if child_sequence_nr == -1 or sequence_nr == -1:
-                    parent_dict[child_index].append(index)
-                    child_dict[index].append(child_index)
-
-        queue = list()
-        for index in df.index:
-            if len(child_dict[index]) == 0 and len(parent_dict[index]) > 0:
-                queue.append(index)
-
-        print(f"# of leaf nodes: {len(queue)}")
-
-        exact_flops_dict = copy.deepcopy(index_to_flops)
-        while len(queue) > 0:
-            node = queue.pop(0)
-            node_flops = exact_flops_dict[node]
-
-            if df.loc[node, "op"] in FLOPABLE_OPS:
-                pass
-            else:
-                target_parent = None
-                for parent in parent_dict[node]:
-                    if df.loc[parent, "op"] in FLOPABLE_OPS:
-                        target_parent = parent
-                        break
-                else:
-                    target_parent = parent_dict[node][0]
-
-                exact_flops_dict[target_parent] += node_flops
-                exact_flops_dict[node] = 0
-
-            for parent in parent_dict[node]:
-                child_dict[parent].remove(node)
-                if len(child_dict[parent]) == 0 and len(parent_dict[parent]) > 0:
-                    queue.append(parent)
-
-        total_flops = [exact_flops_dict.get(index, 0) for index in df.index]
-        df["exact_flops"] = total_flops
-        return df
